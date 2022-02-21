@@ -1,0 +1,120 @@
+---
+title: "data_exploration_project"
+author: "Sella"
+date: "2/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+For this project containing real world messy data, I am to search whether some factors affect the school popularity and people's preferences. Moreover, Google trends has been the indicator for comparing data of a certain time range, representing the popularity of how it is being searched. In this case, the google trend data represent the amount of school popularity.
+
+The very first step is compiling all the trends of the schools
+
+```{r}
+library(tidyverse)
+library(purrr)
+library(dplyr)
+library(readr)
+library(jtools)
+
+list <- list.files(path = "raw_data", pattern = "trends_up_to", full.names = TRUE)
+
+
+trends <- list %>%
+  map(read_csv) %>%
+  bind_rows()
+```
+
+Next, I noticed that there are couple of datas that has the same school name. Therefore, we need to filter so that we have only 1 school per school name
+
+```{r}
+id_name <- read_csv("raw_data/id_name_link.csv") %>%
+  group_by(schname) %>%
+  mutate(N=n()) %>%
+  filter(N==1)
+```
+
+Since the data was made in the 2015, we are to compare the trends before 2015 and after 2015. 
+
+```{r}
+structural_date = as.Date("2015-01-01")
+trends <- trends %>%
+  na.omit(trends) %>%
+  mutate(new_date = as.Date(monthorweek)) %>%
+  group_by(keyword) %>%
+  mutate(new_index = (index-mean(index))/sd(index))
+
+b2015_trend <- trends %>%
+  group_by(schname) %>%
+  filter(new_date<structural_date) %>%
+  mutate(average_index_2015before = mean(new_index)) %>%
+  distinct(schname, .keep_all= TRUE)
+
+a2015_trend <- trends %>%
+  group_by(schname) %>%
+  filter(new_date>=structural_date) %>%
+  mutate(average_index_2015later = mean(new_index)) %>%
+  distinct(schname, .keep_all= TRUE)
+
+a2015_trend <- a2015_trend[c("schname", "average_index_2015later")]
+b2015_trend <- b2015_trend[c("schname", "average_index_2015before")]
+
+b2015_trend <- b2015_trend %>%
+  left_join(a2015_trend, by = "schname", keep = TRUE) %>%
+  left_join(id_name, by = c("schname.x" = "schname"), keep = TRUE) %>%
+  na.omit()
+```
+
+Cohort files contains the detailed informations regarding to predominant degree, SAT scores, Debt, reported earnings and search Index 
+
+```{r}
+cohorts<- read_csv("raw_data/Most+Recent+Cohorts+(Scorecard+Elements).csv")
+
+cohorts <- cohorts %>%
+  right_join(b2015_trend, by = c("UNITID" = "unitid"), keep = TRUE)
+
+cohorts<- filter(cohorts, PREDDEG == 3)
+
+earnings <- rank(cohorts$`md_earn_wne_p10-REPORTED-EARNINGS`)/nrow(cohorts)
+```
+
+
+I personally think that variables that affects how a school is known are earnings (in 10 years range), SAT score on average, graduates average debt and the number of enrolled students in the school. Amount of earnings has been a good indicator of a good school as people would think that being a school graduate would have a potential of being accepted in high earning paying jobs.SAT score has been known as something that indicates the quality of how the students perform well in their studies and top universities has been known to have high SAT score on average. Schools with high debts would not be a good school as it has the chance of  go bankrupt and close their institution. In this way, I considered school debt as a negative correlation toward school popularity. 
+
+Cohorts data contains the SAT scores, Earnings, School Debt, and Number of students (that can be determined as the size of the school as well). However, it was stored as categorical values, we need to change them into numerical values. Then, we are able to make 2 regression models. 
+
+```{r}
+cohorts <- cbind(cohorts, earnings)
+cohorts <- cohorts[grep("[[:digit:]]", cohorts$UGDS), ]
+cohorts <- cohorts[grep("[[:digit:]]", cohorts$SAT_AVG), ]
+cohorts <- cohorts[grep("[[:digit:]]", cohorts$GRAD_DEBT_MDN_SUPP), ]
+cohorts <- cohorts[grep("[[:digit:]]", cohorts$PCTPELL), ]
+
+cohorts <- cohorts %>%
+  mutate(UGDS_new = as.numeric(UGDS)) %>%
+  mutate(SAT_AVG_new = as.numeric(SAT_AVG)) %>%
+  mutate(GRAD_DEBT_MDN_SUPP_new = as.numeric(GRAD_DEBT_MDN_SUPP))
+
+
+reg1<- lm(average_index_2015before ~ earnings + UGDS_new + SAT_AVG_new + GRAD_DEBT_MDN_SUPP_new, data= cohorts) 
+reg2<- lm(average_index_2015before ~ earnings + UGDS_new +SAT_AVG_new + GRAD_DEBT_MDN_SUPP_new, data= cohorts) 
+
+
+summary(reg1)
+summary(reg2)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r}
+plot(reg1)
+plot(reg2)
+```
+
+From this project, I came with a conclusion that with 95% confidence interval, there is no change of the school popularity among the high and low income universities. However, I found something interesting. Though we can see that there is a positive feedbacks toward the universities as salary earnings bring a positive correlation to the trend, the average GPA has a negative relation to the school popularity. From the regression formula, we know that 10% increase of students who graduated that university's percentile, is associated with an increase in the standardized popularity index increased by 0.88 units. Lastly, both of the f-statistics and R-square are really low.
